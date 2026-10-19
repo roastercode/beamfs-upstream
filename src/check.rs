@@ -130,6 +130,9 @@ pub struct Config {
     /// Cover letter placeholders that may stay: the one a sweep is about
     /// to fill, when the sweep itself runs this check. Empty before mailing.
     pub cover_placeholders_allowed: Vec<String>,
+    /// The plan's reason for a base that does not hold the newest tag on
+    /// kernel.org; absent, such a base fails the base check.
+    pub base_behind: Option<String>,
     /// Whether arm64 is built here, with a cross compiler.
     pub cross: bool,
     /// Largest stack frame accepted, in bytes.
@@ -4342,6 +4345,8 @@ fn check_base(ctx: &Ctx) -> Check {
         Ok(s) if s.success()
     );
     let mut problems = Vec::new();
+    let mut details = Vec::new();
+    let mut text = format!("{} holds {}, the newest tag on kernel.org", ctx.cfg.base, tag.name);
     if present {
         let status = Command::new("git")
             .arg("-C")
@@ -4350,6 +4355,30 @@ fn check_base(ctx: &Ctx) -> Check {
             .status();
         match status.as_ref().map(std::process::ExitStatus::code) {
             Ok(Some(0)) => {}
+            // Behind, and the plan says why: mailed as declared, the
+            // reason in the summary beside the tag the base does hold.
+            Ok(Some(1)) if ctx.cfg.base_behind.is_some() => {
+                let on = Command::new("git")
+                    .arg("-C")
+                    .arg(linux)
+                    .args(["describe", "--tags", "--abbrev=0", "--match", "v*", &ctx.base_sha])
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .unwrap_or_else(|| short(&ctx.base_sha).to_string());
+                text = format!(
+                    "{} ({}) holds {}, not {}, the newest tag on kernel.org: mailed as the plan declares",
+                    ctx.cfg.base,
+                    short(&ctx.base_sha),
+                    on,
+                    tag.name
+                );
+                details.push(format!(
+                    "base.behind: {}",
+                    ctx.cfg.base_behind.as_deref().unwrap_or("")
+                ));
+            }
             Ok(Some(1)) => problems.push(format!(
                 "the base {} ({}) does not hold {}: rebase the series onto {}",
                 ctx.cfg.base,
@@ -4374,16 +4403,7 @@ fn check_base(ctx: &Ctx) -> Check {
             tag.name
         ));
     }
-    finish(
-        "base",
-        t0,
-        problems,
-        format!(
-            "{} holds {}, the newest tag on kernel.org",
-            ctx.cfg.base, tag.name
-        ),
-        Vec::new(),
-    )
+    finish("base", t0, problems, text, details)
 }
 
 fn htmldocs(

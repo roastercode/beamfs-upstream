@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0
+
+- `base.behind = "<reason>"` in the plan: the series is built and checked on a
+  base that does not hold the newest tag on kernel.org, the letter's `@@BASE@@`
+  names the tag the base does hold (git describe), and the base check passes
+  saying so, the reason in the signed summary. Without it a base behind the
+  newest tag still refuses. v7.3 was tagged on 2026-10-18 while the series was
+  measured on vfs.all (2c3ba1f1cb41, on v7.3-rc7), which has not moved since.
+
 ## 0.7.2
 
 ### Fixed

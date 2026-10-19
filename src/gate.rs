@@ -204,6 +204,7 @@ pub fn require(g: &Gate) -> Result<Passed> {
         max_mail_bytes: p.series.max_mail_bytes,
         strict_blocking: true,
         strict_exceptions: built.strict_exceptions.clone(),
+        base_behind: built.base_behind.clone(),
         cover_placeholders_allowed: g.placeholders.clone(),
         cross: true,
         stack_limit: 512,

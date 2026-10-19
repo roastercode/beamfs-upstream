@@ -29,3 +29,11 @@ own code raises in the same form, such as the `TRACE_EVENT` layout or a
 `BUFFER_FNS` name, is listed in the plan as a `[[series.strict_exception]]`
 table with its file, its types and the mainline evidence. The run notes
 each exception the findings use and fails on one nothing uses.
+
+## A base behind the newest tag
+
+A series is based on the newest tag kernel.org lists, or on the branch of
+the tree it is meant for, which has to hold that tag. When it does not and
+the series is to be mailed anyway, the plan says why: `base = { url, branch,
+behind = "<reason>" }`. The letter's `@@BASE@@` then names the tag the base
+does hold, and the base check passes saying so, the reason in the summary.

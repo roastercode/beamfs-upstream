@@ -79,6 +79,11 @@ pub struct StrictException {
 pub struct BaseTree {
     pub url: String,
     pub branch: String,
+    /// Why the series is mailed although this branch does not hold the
+    /// newest tag on kernel.org; absent, a base behind that tag refuses.
+    /// The checker's base check carries it into the signed summary.
+    #[serde(default)]
+    pub behind: Option<String>,
 }
 
 fn default_max_mail() -> u64 {
@@ -353,7 +358,9 @@ pub fn build(plan_path: &Path, measured: &str, linux: &Path, tree: &Path) -> Res
             git(linux, &["fetch", "-q", &b.url, &b.branch])
                 .with_context(|| format!("fetch {} of {}", b.branch, b.url))?;
             let sha = git(linux, &["rev-parse", "FETCH_HEAD^{commit}"])?;
-            if git(linux, &["merge-base", "--is-ancestor", &tag.commit, &sha]).is_err() {
+            let holds_newest =
+                git(linux, &["merge-base", "--is-ancestor", &tag.commit, &sha]).is_ok();
+            if !holds_newest && b.behind.is_none() {
                 bail!(
                     "{} of {} ({}) does not hold {}, the newest tag on kernel.org",
                     b.branch,
@@ -362,17 +369,19 @@ pub fn build(plan_path: &Path, measured: &str, linux: &Path, tree: &Path) -> Res
                     tag.name
                 );
             }
+            // The tag the base does hold, said in the letter: the newest
+            // when it holds it, the one git describe names otherwise.
+            let on = if holds_newest {
+                tag.name.clone()
+            } else {
+                git(linux, &["describe", "--tags", "--abbrev=0", "--match", "v*", &sha])
+                    .unwrap_or_else(|_| sha[..12].to_string())
+            };
             let short = b.url.rsplit('/').next().unwrap_or(&b.url).to_string();
             (
                 sha.clone(),
                 sha.clone(),
-                format!(
-                    "{} of {} (commit {}, on {})",
-                    b.branch,
-                    short,
-                    &sha[..12],
-                    tag.name
-                ),
+                format!("{} of {} (commit {}, on {})", b.branch, short, &sha[..12], on),
             )
         }
     };
@@ -536,6 +545,7 @@ pub fn build(plan_path: &Path, measured: &str, linux: &Path, tree: &Path) -> Res
         newer: plan.series.newer.clone(),
         strict_exceptions: plan.series.strict_exceptions.clone(),
         cc: plan.series.cc.clone(),
+        base_behind: plan.series.base.as_ref().and_then(|b| b.behind.clone()),
     })
 }
 
