@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- `Built.base_behind`, missing from 0.8.0, which did not build.
+
 ## 0.8.0
 
 - `base.behind = "<reason>"` in the plan: the series is built and checked on a

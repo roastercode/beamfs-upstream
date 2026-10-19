@@ -144,6 +144,8 @@ pub struct Built {
     pub strict_exceptions: Vec<StrictException>,
     /// The Cc addresses of the plan.
     pub cc: Vec<String>,
+    /// The plan's reason for a base behind the newest tag, when it is.
+    pub base_behind: Option<String>,
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String> {
