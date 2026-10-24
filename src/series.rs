@@ -239,9 +239,16 @@ fn inserted(text: &str, after: &str, line: &str) -> Result<String> {
     Ok(out)
 }
 
-/// MAINTAINERS with `block` (a title line, its fields) placed before the
-/// first section whose title sorts after the block's, with a blank
-/// line between sections.
+/// MAINTAINERS with `block` (a title line, its fields) placed where it
+/// sorts: before the first section whose title sorts after the block's
+/// while the section before sorts before it, and the one after sorts
+/// after it in turn. One neighbour is not enough. The file has sections
+/// out of order (LPC32XX DMAMUX SUPPORT sits among the ARM/ entries,
+/// some 130 titles sort before the one above them), and a block placed
+/// against a stray one lands anywhere: the first series went in after
+/// ARM/LPC32XX, which Randy Dunlap noticed. Titles compare without
+/// regard to case, as parse-maintainers.pl orders them. A blank line
+/// separates sections.
 fn with_section(text: &str, block: &str) -> Result<String> {
     let title = block.lines().next().unwrap_or("").trim_end();
     if title.is_empty() {
@@ -251,20 +258,32 @@ fn with_section(text: &str, block: &str) -> Result<String> {
         bail!("MAINTAINERS already has a section \"{title}\"");
     }
     let lines: Vec<&str> = text.lines().collect();
+    let titles: Vec<(usize, String)> = (1..lines.len().saturating_sub(1))
+        .filter(|&i| {
+            lines[i - 1].is_empty()
+                && !lines[i].is_empty()
+                && lines[i + 1].len() > 2
+                && lines[i + 1].as_bytes().get(1) == Some(&b':')
+                && lines[i].starts_with(|c: char| c.is_ascii_uppercase() || c.is_ascii_digit())
+        })
+        .map(|i| (i, lines[i].to_ascii_uppercase()))
+        .collect();
+    let key = title.to_ascii_uppercase();
     let mut at = None;
-    for i in 1..lines.len().saturating_sub(1) {
-        let is_title = lines[i - 1].is_empty()
-            && !lines[i].is_empty()
-            && lines[i + 1].len() > 2
-            && &lines[i + 1][1..2] == ":"
-            && lines[i].starts_with(|c: char| c.is_ascii_uppercase() || c.is_ascii_digit());
-        if is_title && lines[i] > title {
-            at = Some(i);
+    for w in 1..titles.len() {
+        let (_, prev) = &titles[w - 1];
+        let (i, next) = &titles[w];
+        let next_in_order = match titles.get(w + 1) {
+            Some((_, after)) => next < after,
+            None => true,
+        };
+        if *prev < key && key < *next && prev < next && next_in_order {
+            at = Some(*i);
             break;
         }
     }
     let Some(i) = at else {
-        bail!("no section of MAINTAINERS sorts after \"{title}\"");
+        bail!("no two ordered sections of MAINTAINERS enclose \"{title}\"");
     };
     let mut out = lines[..i].join("\n");
     out.push('\n');
@@ -590,5 +609,53 @@ mod tests {
         );
         assert!(with_section(&out, "BEAMFS FILE SYSTEM\nM:\tme\n").is_err());
         assert!(with_section("AAA\nM:\tx\n", "ZZZ\nM:\tx\n").is_err());
+    }
+}
+
+#[cfg(test)]
+mod section_tests {
+    use super::with_section;
+
+    const FILE: &str = "List of maintainers\n\n\
+ARM/LPC32XX SOC SUPPORT\nM:\ta\n\n\
+LPC32XX DMAMUX SUPPORT\nM:\tb\n\n\
+ARM/Marvell Dove SOC support\nM:\tc\n\n\
+BDISP ST MEDIA DRIVER\nM:\td\n\n\
+BECKHOFF CX5020 ETHERCAT MASTER DRIVER\nM:\te\n\n\
+BEFS FILE SYSTEM\nM:\tf\n";
+
+    fn pos(text: &str, title: &str) -> usize {
+        text.lines().position(|l| l == title).expect(title)
+    }
+
+    #[test]
+    fn placed_between_ordered_neighbours_not_against_a_stray() {
+        let out = with_section(FILE, "BEAMFS FILE SYSTEM\nM:\tx\nF:\tfs/beamfs/\n").unwrap();
+        let bdisp = pos(&out, "BDISP ST MEDIA DRIVER");
+        let ours = pos(&out, "BEAMFS FILE SYSTEM");
+        let beck = pos(&out, "BECKHOFF CX5020 ETHERCAT MASTER DRIVER");
+        assert!(bdisp < ours && ours < beck, "{out}");
+        assert!(pos(&out, "LPC32XX DMAMUX SUPPORT") < bdisp);
+        assert!(out.contains("M:\td\n\nBEAMFS FILE SYSTEM\nM:\tx\nF:\tfs/beamfs/\n\nBECKHOFF"));
+    }
+
+    #[test]
+    fn case_does_not_order() {
+        let out = with_section(FILE, "ARM/MICROCHIP SoC support\nM:\tx\n").unwrap();
+        let marvell = pos(&out, "ARM/Marvell Dove SOC support");
+        let ours = pos(&out, "ARM/MICROCHIP SoC support");
+        assert!(marvell < ours && ours < pos(&out, "BDISP ST MEDIA DRIVER"), "{out}");
+    }
+
+    #[test]
+    fn nothing_after_is_refused() {
+        let e = with_section(FILE, "ZZZ LAST\nM:\tx\n").unwrap_err().to_string();
+        assert!(e.contains("enclose"), "{e}");
+    }
+
+    #[test]
+    fn existing_section_is_refused() {
+        let e = with_section(FILE, "BEFS FILE SYSTEM\nM:\tx\n").unwrap_err().to_string();
+        assert!(e.contains("already"), "{e}");
     }
 }

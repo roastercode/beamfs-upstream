@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.0
+
+Two things the first series' reviewers found that the checker had let
+through.
+
+### Added
+- `build_hexagon`: hexagon `comet_defconfig` with LLVM, the filesystem as
+  a module. Hexagon has no divide instruction, so a 64-bit division that
+  x86 and arm do inline, or through their own `__div64_32`, becomes a call
+  to `__hexagon_udivdi3`, which the kernel does not provide, and modpost
+  refuses the module. `build_i386` and `build_arm` passed the first series;
+  the kernel test robot's hexagon-allmodconfig caught `enc_ns / iters` in
+  rsbench.c on 2026-10-23. W=1 runs on it with the other ports.
+- `maintainers` checks that the section covering fs/<fs>/ sits in
+  alphabetical order in the built tree: after a title that sorts before
+  it, before one that sorts after it and is itself followed in order.
+
+### Fixed
+- The MAINTAINERS block was placed before the first section whose title
+  sorted after it. The kernel's file has some 130 titles out of order
+  (`LPC32XX DMAMUX SUPPORT` sits among the `ARM/` entries), and the first
+  series landed against that stray, after `ARM/LPC32XX SOC SUPPORT`, as
+  Randy Dunlap pointed out. The block now needs two ordered neighbours,
+  the one after it being in order with its own successor, and titles
+  compare without regard to case, as parse-maintainers.pl orders them.
+
 ## 0.8.1
 
 - `Built.base_behind`, missing from 0.8.0, which did not build.

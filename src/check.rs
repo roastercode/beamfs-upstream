@@ -20,7 +20,9 @@
 //! without booting: sparse, smatch, coccicheck, checkstack, kernel-doc,
 //! the documentation of the userspace interfaces, builds at =m and =y
 //! under several configurations, with clang, allnoconfig and
-//! allmodconfig, on 32 bits (i386 and arm) and big-endian (s390), with
+//! allmodconfig, on 32 bits (i386, arm, and hexagon, which has no divide
+//! instruction and so sends every 64-bit division to libgcc) and
+//! big-endian (s390), with
 //! W=1 and with gcc -W, and on the newer trees; and, from
 //! Documentation/process/generated-content.rst, a cover letter that says
 //! which tools were used and how the series was tested.
@@ -2349,6 +2351,79 @@ fn check_prose(ctx: &Ctx) -> Check {
     )
 }
 
+/// The sections of MAINTAINERS: title and the lines under it, a blank
+/// line between sections, a title being a line that starts with a
+/// capital or a digit and is followed by a field line (`M:`, `F:`, ...).
+fn sections(text: &str) -> Vec<(String, Vec<String>)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let is_title = (i == 0 || lines[i - 1].is_empty())
+            && !lines[i].is_empty()
+            && i + 1 < lines.len()
+            && lines[i + 1].len() > 2
+            && lines[i + 1].as_bytes().get(1) == Some(&b':')
+            && lines[i].starts_with(|c: char| c.is_ascii_uppercase() || c.is_ascii_digit());
+        if is_title {
+            let title = lines[i].to_string();
+            let mut body = Vec::new();
+            i += 1;
+            while i < lines.len() && !lines[i].is_empty() {
+                body.push(lines[i].to_string());
+                i += 1;
+            }
+            out.push((title, body));
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Whether the MAINTAINERS section covering fs/<fs>/ sits in
+/// alphabetical order: after a section that sorts before it, before one
+/// that sorts after it and is itself followed in order, so that a stray
+/// section (LPC32XX DMAMUX SUPPORT among the ARM/ entries) does not pass
+/// for a neighbour. Case does not count, as parse-maintainers.pl orders.
+/// Randy Dunlap asked for this on the first series, whose entry had been
+/// placed against that stray.
+fn section_order(text: &str, fs: &str) -> Result<String, String> {
+    let all = sections(text);
+    let dir = format!("fs/{fs}/");
+    let Some(at) = all.iter().position(|(_, body)| {
+        body.iter()
+            .any(|l| l.starts_with("F:") && l.trim_start_matches("F:").trim() == dir)
+    }) else {
+        return Err(format!("MAINTAINERS has no section with F:\t{dir}"));
+    };
+    let key = |s: &str| s.to_ascii_uppercase();
+    let title = &all[at].0;
+    let prev = at.checked_sub(1).map(|p| all[p].0.as_str());
+    let next = all.get(at + 1).map(|n| n.0.as_str());
+    let after = all.get(at + 2).map(|n| n.0.as_str());
+    let before_ok = prev.is_none_or(|p| key(p) < key(title));
+    let next_ok = next.is_none_or(|n| key(title) < key(n));
+    let next_sound = match (next, after) {
+        (Some(n), Some(a)) => key(n) <= key(a),
+        _ => true,
+    };
+    if before_ok && next_ok && next_sound {
+        Ok(format!(
+            "\"{title}\" between \"{}\" and \"{}\", in order",
+            prev.unwrap_or("(start)"),
+            next.unwrap_or("(end)")
+        ))
+    } else {
+        Err(format!(
+            "MAINTAINERS: \"{title}\" sits between \"{}\" and \"{}\"{}, not in alphabetical order",
+            prev.unwrap_or("(start)"),
+            next.unwrap_or("(end)"),
+            if next_sound { "" } else { " (itself out of order)" }
+        ))
+    }
+}
+
 fn check_maintainers(ctx: &Ctx) -> Check {
     let t0 = Instant::now();
     let mut problems = Vec::new();
@@ -2395,6 +2470,13 @@ fn check_maintainers(ctx: &Ctx) -> Check {
             problems.push("the series adds files and no patch touches MAINTAINERS".to_string());
         }
         (None, _) => notes.push("the series adds no file".to_string()),
+    }
+    match section_order(
+        &std::fs::read_to_string(ctx.tree.join("MAINTAINERS")).unwrap_or_default(),
+        &ctx.cfg.fs,
+    ) {
+        Ok(n) => notes.push(n),
+        Err(e) => problems.push(e),
     }
     let gm = ctx.tree.join("scripts/get_maintainer.pl");
     match output(
@@ -3579,6 +3661,27 @@ fn check_builds(ctx: &Ctx, add: &mut dyn FnMut(Check)) {
             base: "tinyconfig",
             set: port_set.clone(),
             require: s390_req,
+            target: None,
+            expect: Expect::Module,
+            keep: true,
+        },
+        // Hexagon has no divide instruction: a 64-bit division that x86
+        // and arm do inline, or through their own __div64_32, becomes a
+        // call to __hexagon_udivdi3, which the kernel does not provide,
+        // and modpost refuses the module. The i386 and arm builds passed
+        // the first series; the kernel test robot's hexagon-allmodconfig
+        // caught enc_ns / iters in rsbench.c on 2026-10-23.
+        Variant {
+            name: "build_hexagon",
+            what: format!(
+                "hexagon comet_defconfig with LLVM, {fs} as a module with every option: no divide instruction, every 64-bit division shows in modpost"
+            ),
+            dir: "build-hexagon-m".to_string(),
+            arch: "hexagon",
+            vars: vec!["LLVM=1".to_string()],
+            base: "comet_defconfig",
+            set: port_set.clone(),
+            require: port_req.clone(),
             target: None,
             expect: Expect::Module,
             keep: true,
@@ -5110,5 +5213,62 @@ mod strict_exception_tests {
         assert_eq!(excepted(&xs, l, "CAMELCASE"), None);
         let l = "fs/beamfs/not_beamfs.h:1: CHECK:CAMELCASE: Avoid CamelCase: <Foo>";
         assert_eq!(excepted(&xs, l, "CAMELCASE"), None);
+    }
+}
+
+#[cfg(test)]
+mod section_order_tests {
+    use super::{section_order, sections};
+
+    fn file(ours_after: &str) -> String {
+        let parts = [
+            ("ARM/LPC32XX SOC SUPPORT", "M:\ta"),
+            ("LPC32XX DMAMUX SUPPORT", "M:\tb"),
+            ("ARM/Marvell Dove SOC support", "M:\tc"),
+            ("BDISP ST MEDIA DRIVER", "M:\td"),
+            ("BECKHOFF CX5020 ETHERCAT MASTER DRIVER", "M:\te"),
+            ("BEFS FILE SYSTEM", "M:\tf"),
+        ];
+        let mut s = String::from("List of maintainers\n\n");
+        for (t, b) in parts {
+            s.push_str(&format!("{t}\n{b}\n\n"));
+            if t == ours_after {
+                s.push_str("BEAMFS FILE SYSTEM\nM:\tx\nF:\tfs/beamfs/\n\n");
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn parses_sections() {
+        let all = sections(&file("BDISP ST MEDIA DRIVER"));
+        assert_eq!(all.len(), 7);
+        assert_eq!(all[4].0, "BEAMFS FILE SYSTEM");
+        assert_eq!(all[4].1, vec!["M:\tx", "F:\tfs/beamfs/"]);
+    }
+
+    #[test]
+    fn in_order_passes() {
+        let n = section_order(&file("BDISP ST MEDIA DRIVER"), "beamfs").unwrap();
+        assert!(n.contains("BDISP") && n.contains("BECKHOFF"), "{n}");
+    }
+
+    #[test]
+    fn against_a_stray_fails_as_the_first_series_did() {
+        let e = section_order(&file("ARM/LPC32XX SOC SUPPORT"), "beamfs").unwrap_err();
+        assert!(e.contains("not in alphabetical order"), "{e}");
+        assert!(e.contains("itself out of order"), "{e}");
+    }
+
+    #[test]
+    fn plainly_misplaced_fails() {
+        let e = section_order(&file("BEFS FILE SYSTEM"), "beamfs").unwrap_err();
+        assert!(e.contains("BEFS"), "{e}");
+    }
+
+    #[test]
+    fn missing_section_fails() {
+        let e = section_order(&file("none"), "beamfs").unwrap_err();
+        assert!(e.contains("no section"), "{e}");
     }
 }

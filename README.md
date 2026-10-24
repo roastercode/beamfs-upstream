@@ -30,6 +30,23 @@ own code raises in the same form, such as the `TRACE_EVENT` layout or a
 table with its file, its types and the mainline evidence. The run notes
 each exception the findings use and fails on one nothing uses.
 
+## Word sizes and byte orders
+
+Besides the x86_64 and arm64 builds, the filesystem is built as a module
+on i386, arm (LLVM), s390 (LLVM, big-endian) and hexagon (LLVM,
+`comet_defconfig`), and the W=1 pass runs on each. Hexagon is there for
+one reason: it has no divide instruction, so a 64-bit division that x86
+and arm do inline, or through their own `__div64_32`, becomes a call to
+`__hexagon_udivdi3`, which the kernel does not provide, and modpost
+refuses the module. `div_u64()` and `do_div()` are the way to divide a
+u64 in a module; the i386 and arm builds alone do not say so.
+
+The MAINTAINERS block of the plan is placed by alphabetical order of its
+title, case aside, between two sections that are themselves in order: the
+kernel's file has some 130 titles that sort before the one above them,
+and a block placed against one of those lands anywhere. The `maintainers`
+check reads the built tree back and refuses an entry out of order.
+
 ## A base behind the newest tag
 
 A series is based on the newest tag kernel.org lists, or on the branch of
